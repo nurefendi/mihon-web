@@ -1,0 +1,8 @@
+.env
+*.env
+!.env.example
+*.log
+mihon-web
+artifacts/
+screenshots/
+__pycache__/

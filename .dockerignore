@@ -1,0 +1,8 @@
+.git
+.env
+*.env
+*.log
+node_modules
+ops
+screenshots
+artifacts

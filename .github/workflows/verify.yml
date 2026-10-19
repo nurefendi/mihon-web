@@ -1,0 +1,61 @@
+name: Verify Mihon Web
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: write
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ci-only-not-for-production
+          MARIADB_DATABASE: mihon_web_test
+          MARIADB_USER: mihon_web_test
+          MARIADB_PASSWORD: ci-only-isolated-test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go verification including isolated MariaDB
+        env:
+          MYSQL_TEST_DSN: mihon_web_test:ci-only-isolated-test@tcp(127.0.0.1:3306)/mihon_web_test?parseTime=true
+        run: |
+          set -o pipefail
+          go test -race -count=1 ./... 2>&1 | tee test.log
+          go vet ./...
+      - name: UI contracts
+        run: |
+          npm install --prefix "$RUNNER_TEMP/mihon-ui-test" --no-save --ignore-scripts --no-audit --no-fund jsdom@26.1.0
+          NODE_PATH="$RUNNER_TEMP/mihon-ui-test/node_modules" node --test tests/ui.test.cjs tests/ui.dom.cjs
+      - name: Build runtime image
+        run: docker build -t mihon-web:ci .
+      - name: Publish readable CI status over Git SSH
+        if: always() && github.event_name == 'push'
+        env:
+          RESULT: ${{ job.status }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-status"
+          cp test.log "$RUNNER_TEMP/ci-status/test.log" 2>/dev/null || true
+          printf 'source_sha=%s\nstatus=%s\n' "$SOURCE_SHA" "$RESULT" > "$RUNNER_TEMP/ci-status/status.txt"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git checkout --orphan ci-status-tmp
+          git rm -rf .
+          cp "$RUNNER_TEMP/ci-status/"* .
+          git add status.txt test.log
+          git commit -m "CI $RESULT for $SOURCE_SHA"
+          git push --force origin HEAD:refs/heads/ci-status

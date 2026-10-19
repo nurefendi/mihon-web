@@ -1,0 +1,61 @@
+name: mihon-web
+services:
+  engine:
+    image: ghcr.io/suwayomi/suwayomi-server@sha256:1fac27c387dc2ea9949e1a01ad7f6d6de9d72d3988338a95476748e5c45c4582
+    container_name: mihon-engine
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.75
+    environment:
+      TZ: Asia/Jakarta
+      BIND_IP: 0.0.0.0
+      BIND_PORT: '4567'
+      WEB_UI_ENABLED: 'false'
+      AUTH_MODE: none
+      KCEF_ENABLED: 'false'
+      JAVA_TOOL_OPTIONS: -Xms64m -Xmx256m -XX:MaxMetaspaceSize=128m
+    volumes:
+      - engine-data:/home/suwayomi/.local/share/Tachidesk
+    networks: [engine]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  web:
+    image: ${MIHON_WEB_IMAGE:-mihon-web:local}
+    container_name: mihon-web
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.50
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    tmpfs: ['/tmp:size=16m,mode=1777']
+    env_file:
+      - path: ${MIHON_RUNTIME_ENV:-/home/mazaya/mihon-web-deploy/runtime.env}
+        format: raw
+    ports: ['127.0.0.1:8084:8080']
+    networks: [engine, database, proxy]
+    depends_on: [engine]
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 180s
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+networks:
+  engine:
+    name: mihon-net
+    external: true
+  database:
+    name: quiz-net
+    external: true
+  proxy:
+    name: npm-net
+    external: true
+volumes:
+  engine-data:
+    name: mihon-engine-data
+    external: true

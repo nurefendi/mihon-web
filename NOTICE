@@ -1,0 +1,14 @@
+Mihon Web
+Independent web implementation; not affiliated with or endorsed by Mihon.
+
+UI behavior, five-tab navigation and DEFAULT color values reference:
+Mihon — https://github.com/mihonapp/mihon
+Baseline commit deeb9b2584b6e246135cbd31da49a39e6b6e1e52
+Mihon is licensed under the Apache License, Version 2.0.
+
+Suwayomi-Server is a separately distributed compatibility-engine dependency:
+https://github.com/Suwayomi/Suwayomi-Server
+The engine's image/code remains governed by its own upstream license and notices.
+
+This repository contains no bundled third-party extension repository, manga
+collection, extension APK, or upstream official branding/image assets.
