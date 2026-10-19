@@ -33,6 +33,21 @@ Tests were written and observed RED before the corresponding helper, route, DOM,
 
 Coverage: all five routes; honest empty state; category merge including explicit category 0; text/attribute escaping; long source IDs; exact REST methods/forms and chapter-index/page paths; all-fetch CSRF; HTTP/GraphQL errors; history bridge; queue bridge; preference writes/readback; bookmark writes/readback; repository trust acknowledgement; login visibility/validation; progress only after successful image loading.
 
+## Mobile webtoon scroll regressions
+
+```sh
+python3 -m venv "$HOME/.cache/mihon-browser-test"
+"$HOME/.cache/mihon-browser-test/bin/pip" install playwright==1.64.0
+"$HOME/.cache/mihon-browser-test/bin/python" -m playwright install --with-deps chromium
+"$HOME/.cache/mihon-browser-test/bin/python" tests/test_reader_scroll.py
+```
+
+Six Chromium tests run a local HTTP fixture server with generated technical PNGs, varied image sizes, delayed/out-of-order responses and an explicitly failed image. They exercise downward wheel input and native CDP touch swipes, natural image ratios/no inter-page gaps, deferred one-time resume, gesture-cancelled resume, failure continuation, and exiting before an unseen prefetched page can save progress. They never contact production. GitHub Actions runs the same pinned Playwright tests and includes their output in the readable `ci-status` test log.
+
+The webtoon reader fetches at most three page images concurrently, reveals them in contiguous order only after natural dimensions are known, and extends the preload window near the tail. It does not insert viewport-sized placeholders that later collapse. Resume may need to load preceding page dimensions first; a user gesture cancels the automatic jump. The loading footer keeps the same height when loading completes.
+
+`ops/reader-scroll-qa.py` separately exercises the **actual** engine images for `/reader/143/10` through the candidate or public website. It creates a temporary real login, aborts browser API mutations, checks chapter progress against a captured snapshot, and logs out with readback. It uses mobile native touch input and browser-level network throttling, not response fixtures. Credentials stay in the existing private server file. Supported targets are explicitly restricted to the public origin and local candidate ports; screenshots/traces are written outside Git. This is Chromium mobile emulation, not certification on a physical iPhone/Safari.
+
 ## Read-only stable-engine smoke
 
 Opt-in, no seeding or mutations. It uses actual HTTP responses from the engine and the exact curated query strings in `bridge.go` to render all primary routes and every More section. `ENGINE_URL` must point to the private **v2.4.2366** engine. The test skips when it is unset.

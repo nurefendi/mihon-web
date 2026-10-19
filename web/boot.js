@@ -4,12 +4,12 @@
  const U=window.MihonUI,{escape:e}=U;
  const main=document.querySelector('main'),nav=document.querySelector('#navigation');
  const current=U.route(location.pathname),params=new URLSearchParams(location.search);
- let api,prefs,session,observer,queueSocket,noticeTimer,renderVersion=0;
+ let api,prefs,session,readerCleanup=()=>{},queueSocket,noticeTimer,renderVersion=0;
  const notice=(text,error=false)=>{const node=document.querySelector('#notice');clearTimeout(noticeTimer);node.textContent=text;node.classList.toggle('error',error);node.hidden=false;noticeTimer=setTimeout(()=>{node.hidden=true;},error?15000:6000);};
  const applyTheme=()=>{document.documentElement.dataset.theme=prefs.theme==='system'?(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):prefs.theme;document.documentElement.dataset.columns=String(prefs.gridColumns||3);};
  async function load(){
   const version=++renderVersion;
-  if(observer)observer.disconnect();if(queueSocket){queueSocket.close();queueSocket=null;}
+  readerCleanup();clearTimeout(progressTimer);if(queueSocket){queueSocket.close();queueSocket=null;}
   main.setAttribute('aria-busy','true');
   try{
    const html=await U.renderRoute(current,params,api,prefs);
@@ -151,7 +151,7 @@
    }
   }catch(error){notice(error.message,true);}finally{button.disabled=false;}
  });
- let readerPage=0,progressTimer,progressChain=Promise.resolve(),lastSaved=-1;
+ let readerPage=0,readerViewed=false,progressTimer,progressChain=Promise.resolve(),lastSaved=-1;
  function saveProgress(shell,page,immediate=false){
   clearTimeout(progressTimer);
   const run=()=>{
@@ -171,25 +171,56 @@
  }
  function bindReader(){
   const shell=document.querySelector('.reader-shell');if(!shell)return;
-  readerPage=Number(shell.dataset.readerPage);lastSaved=-1;
+  readerPage=Number(shell.dataset.readerPage);readerViewed=false;lastSaved=-1;
   if(!Number(shell.dataset.readerCount))return;
   const images=[...shell.querySelectorAll('.reader-page')];
-  images.forEach(image=>image.addEventListener('load',()=>{
-   image.classList.add('loaded');
-   const rect=image.getBoundingClientRect();
-   if(shell.dataset.readerMode!=='webtoon'||rect.top<innerHeight*.65&&rect.bottom>innerHeight*.2){readerPage=Number(image.dataset.page);shell.dataset.readerPage=String(readerPage);saveProgress(shell,readerPage);}
-  }));
-  if(shell.dataset.readerMode==='webtoon'){
-   // Reserve a screen per unloaded page so lazy images cannot all intersect at once.
-   // A successful image load (not a failed HTTP request) enables progress writes.
-   const resume=images[readerPage];if(readerPage>0)requestAnimationFrame(()=>resume?.scrollIntoView({block:'start'}));
-   if('IntersectionObserver' in window){
-    observer=new IntersectionObserver(entries=>{
-     const visible=entries.filter(x=>x.isIntersecting&&x.target.classList.contains('loaded')).sort((a,b)=>a.boundingClientRect.top-b.boundingClientRect.top);
-     if(visible.length){readerPage=Number(visible[0].target.dataset.page);shell.dataset.readerPage=String(readerPage);saveProgress(shell,readerPage);}
-    },{rootMargin:'-10% 0px -50% 0px',threshold:0});images.forEach(image=>observer.observe(image));
-   }
+  if(shell.dataset.readerMode!=='webtoon'){
+   const loaded=image=>{readerViewed=true;image.classList.add('loaded');readerPage=Number(image.dataset.page);shell.dataset.readerPage=String(readerPage);saveProgress(shell,readerPage);};
+   images.forEach(image=>{image.addEventListener('load',()=>loaded(image));if(image.complete&&image.naturalWidth)loaded(image);});
+   return;
   }
+  // Append only contiguous, fully loaded pages. Unknown image sizes must never
+  // resize placeholders above the reader or make the document shorter.
+  const tail=shell.querySelector('.reader-loading'),resume=readerPage;
+  let revealed=0,next=0,active=0,target=Math.min(images.length-1,resume+2),frame=0,stopped=false,interacted=false,pendingResume=resume>0,observedPage=-1;
+  function track(){
+   if(stopped||pendingResume)return;
+   const image=images.find(image=>{if(image.hidden||!image.classList.contains('loaded'))return false;const rect=image.getBoundingClientRect();return rect.bottom>innerHeight*.1&&rect.top<innerHeight*.65;});
+   if(image&&Number(image.dataset.page)!==observedPage){observedPage=readerPage=Number(image.dataset.page);readerViewed=true;shell.dataset.readerPage=String(readerPage);saveProgress(shell,readerPage);}
+  }
+  function pump(){
+   if(stopped||!shell.isConnected)return;
+   while(active<3&&next<=target){const image=images[next++];active++;image.src=image.dataset.src;}
+   const failed=images.filter(image=>image.classList.contains('image-error')).length;
+   tail.textContent=revealed===images.length?(failed?`${failed} halaman gagal dimuat · Muat ulang untuk mencoba lagi`:'Semua halaman dimuat'):active?'Memuat halaman…':'Gulir untuk memuat halaman berikutnya';
+  }
+  function nearTail(){
+   if(tail.getBoundingClientRect().top<innerHeight+1200)target=Math.min(images.length-1,Math.max(target,revealed+2));
+   pump();
+  }
+  function settled(image,ok){
+   if(stopped)return;
+   active--;
+   image.classList.add(ok?'loaded':'image-error');
+   if(ok&&image.naturalWidth){image.width=image.naturalWidth;image.height=image.naturalHeight;}
+   // An errored page occupies a stable slot; it must not block later pages.
+   while(revealed<images.length&&(images[revealed].classList.contains('loaded')||images[revealed].classList.contains('image-error')))images[revealed++].hidden=false;
+   if(pendingResume&&revealed>resume){
+    requestAnimationFrame(()=>{
+     if(stopped||interacted||!pendingResume)return;
+     pendingResume=false;images[resume].scrollIntoView({block:'start',behavior:'instant'});track();nearTail();
+    });
+   }
+   nearTail();track();
+  }
+  const cancelResume=()=>{interacted=true;pendingResume=false;};
+  const scroll=()=>{if(frame)return;frame=requestAnimationFrame(()=>{frame=0;if(stopped)return;nearTail();track();});};
+  const gestures=['touchstart','pointerdown','wheel','keydown'];
+  gestures.forEach(type=>document.addEventListener(type,cancelResume,{passive:true}));
+  window.addEventListener('scroll',scroll,{passive:true});window.addEventListener('resize',scroll,{passive:true});
+  images.forEach(image=>{image.addEventListener('load',()=>settled(image,true),{once:true});image.addEventListener('error',()=>settled(image,false),{once:true});});
+  readerCleanup=()=>{stopped=true;cancelAnimationFrame(frame);gestures.forEach(type=>document.removeEventListener(type,cancelResume));window.removeEventListener('scroll',scroll);window.removeEventListener('resize',scroll);};
+  pump();
  }
  function showPage(page){
   const shell=document.querySelector('.reader-shell');if(!shell||page<0||page>=Number(shell.dataset.readerCount))return;
@@ -203,7 +234,7 @@
  }
  function movePage(delta){const shell=document.querySelector('.reader-shell');if(shell&&shell.dataset.readerMode!=='webtoon')showPage(readerPage+delta);}
  document.addEventListener('keydown',event=>{if(['INPUT','SELECT','TEXTAREA','BUTTON'].includes(event.target.tagName))return;const shell=document.querySelector('.reader-shell');if(!shell||shell.dataset.readerMode==='webtoon')return;if(['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();movePage((event.key==='ArrowRight'?1:-1)*(shell.dataset.readerMode==='rtl'?-1:1));}});
- window.addEventListener('pagehide',()=>{clearTimeout(progressTimer);const shell=document.querySelector('.reader-shell');if(shell&&Number(shell.dataset.readerCount)&&shell.querySelector(`.reader-page[data-page="${readerPage}"]`)?.classList.contains('loaded'))saveProgress(shell,readerPage,true);if(queueSocket)queueSocket.close();});
+ window.addEventListener('pagehide',()=>{clearTimeout(progressTimer);const shell=document.querySelector('.reader-shell');if(shell&&readerViewed&&Number(shell.dataset.readerCount)&&shell.querySelector(`.reader-page[data-page="${readerPage}"]`)?.classList.contains('loaded'))saveProgress(shell,readerPage,true);if(queueSocket)queueSocket.close();});
  document.addEventListener('error',event=>{if(event.target.tagName==='IMG'){event.target.classList.add('image-error');if(event.target.classList.contains('reader-page'))notice('Halaman gambar gagal dimuat. Muat ulang atau periksa sumber.',true);}},true);
  async function start(){
   nav.innerHTML=U.navigation(current.name==='manga'||current.name==='reader'?'library':current.name);

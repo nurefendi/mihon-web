@@ -40,6 +40,13 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/mihon-ui-test" --no-save --ignore-scripts --no-audit --no-fund jsdom@26.1.0
           NODE_PATH="$RUNNER_TEMP/mihon-ui-test/node_modules" node --test tests/ui.test.cjs tests/ui.dom.cjs
+      - name: Mobile reader scroll regressions
+        run: |
+          set -o pipefail
+          python3 -m venv "$RUNNER_TEMP/mihon-browser-test"
+          "$RUNNER_TEMP/mihon-browser-test/bin/pip" install playwright==1.64.0
+          "$RUNNER_TEMP/mihon-browser-test/bin/python" -m playwright install --with-deps chromium
+          "$RUNNER_TEMP/mihon-browser-test/bin/python" tests/test_reader_scroll.py 2>&1 | tee -a test.log
       - name: Build runtime image
         run: docker build -t mihon-web:ci .
       - name: Publish readable CI status over Git SSH

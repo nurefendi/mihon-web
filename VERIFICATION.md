@@ -28,6 +28,16 @@ The Nginx config trusts Cloudflare client identity only for the official edge ra
 - Tracking, source-specific filters/preferences editors, migration, global multi-source search, history deletion, incognito/statistics, full Android viewer controls, browser-offline support and full pixel parity remain roadmap work.
 - The app is one administrator / one shared engine library, not secure isolated multi-user hosting.
 
+## Mobile reader scroll fix — 2026-10-20 (WIB)
+
+- The reported backward movement was reproduced with the actual browser rendering code and labelled delayed technical PNG fixtures: downward-only input produced reverse jumps of 180–435 px. A CSS-only probe retaining the old placeholder minimum removed those jumps but would leave gaps; it was not shipped as the workaround.
+- Webtoon pages now load in a bounded three-request window and are revealed in order at their natural dimensions, so unknown-size placeholders cannot collapse above the reading position. The fixed-height loading footer does not disappear or shrink. Failed-image slots use a width-based aspect ratio rather than viewport height; a regression first failed by 60 px during a height-only viewport resize, then passed after the fix. Completion explicitly reports failed pages instead of calling them loaded.
+- Resume waits for preceding page dimensions, runs once, and is cancelled by a reader gesture. A hidden prefetched page cannot save progress on exit. Loading the saved position can still be delayed when earlier source images are unavailable.
+- **Six Chromium scroll regressions passed**, including native CDP touch swipes, all fixture pages revealed, natural image ratios/no gaps, out-of-order loading, resume/cancellation, failed-page continuation/resize, and early-exit progress protection. **24 existing JS helper/view/DOM tests passed**. The rebuilt candidate also ran Go unit tests and vet successfully.
+- The real-engine candidate was exercised on `/reader/143/10` at **390×844 and 360×800**, with native touch input and network throttling. Recorded 51 and 49 scroll events respectively, with **no reverse jumps and no horizontal overflow**. The exact no-query route displayed its captured saved page (19) in the viewport. All browser API mutations were aborted; readback confirmed the user's captured chapter progress unchanged and the temporary QA session was logged out.
+- **Source-image health did not pass**: during these candidate checks only one image loaded in the initial sections and three failed in each viewport; the saved-position run reported ten failed images. Direct engine probing returned HTTP 500 for page index 1 after 30 seconds, and engine logs recorded `java.io.IOException: Connect timed out`; page index 13 was genuinely served from the engine with HTTP 200. These are real source failures, not invented image responses or evidence of a successful full-chapter read. The scroll fix does not claim to repair the external image host.
+- Candidate screenshots show the real broken-image state and its error notice, without horizontal overflow or a full-screen fixed overlay. This verification is Chromium mobile emulation, **not a physical Android/iPhone or Safari certification**. Public deployment and matching CI remain separately verified release gates.
+
 ## Reproducible commands
 
 - `go test -race -count=1 ./...` and `go vet ./...`
