@@ -1,0 +1,20 @@
+ok  	github.com/nurefendi/mihon-web	4.190s
+test_exit_before_resume_does_not_save_an_unseen_loaded_page (__main__.ReaderScrollTest.test_exit_before_resume_does_not_save_an_unseen_loaded_page) ... ok
+test_failed_manual_retry_requires_another_explicit_click (__main__.ReaderScrollTest.test_failed_manual_retry_requires_another_explicit_click) ... ok
+test_failed_page_does_not_block_following_pages (__main__.ReaderScrollTest.test_failed_page_does_not_block_following_pages) ... ok
+test_failed_page_retries_only_on_its_button_and_never_duplicates (__main__.ReaderScrollTest.test_failed_page_retries_only_on_its_button_and_never_duplicates) ... ok
+test_late_size_above_viewport_preserves_visible_image_position (__main__.ReaderScrollTest.test_late_size_above_viewport_preserves_visible_image_position) ... ok
+test_loading_is_bounded_and_retired_retry_handlers_are_inert (__main__.ReaderScrollTest.test_loading_is_bounded_and_retired_retry_handlers_are_inert) ... ok
+test_native_touch_swipes_preserve_visual_anchor_when_images_load (__main__.ReaderScrollTest.test_native_touch_swipes_preserve_visual_anchor_when_images_load) ... ok
+test_paged_modes_offer_manual_retry_for_each_displayed_failure (__main__.ReaderScrollTest.test_paged_modes_offer_manual_retry_for_each_displayed_failure) ... ok
+test_paged_navigation_does_not_implicitly_retry_a_failed_page (__main__.ReaderScrollTest.test_paged_navigation_does_not_implicitly_retry_a_failed_page) ... ok
+test_paged_offscreen_completion_does_not_save_progress (__main__.ReaderScrollTest.test_paged_offscreen_completion_does_not_save_progress) ... ok
+test_ready_page_is_visible_while_first_page_is_delayed (__main__.ReaderScrollTest.test_ready_page_is_visible_while_first_page_is_delayed) ... ok
+test_resume_is_prioritized_without_waiting_for_preceding_sizes (__main__.ReaderScrollTest.test_resume_is_prioritized_without_waiting_for_preceding_sizes) ... ok
+test_user_gesture_cancels_pending_resume (__main__.ReaderScrollTest.test_user_gesture_cancels_pending_resume) ... ok
+test_wheel_scrolling_preserves_visual_anchor_when_images_load (__main__.ReaderScrollTest.test_wheel_scrolling_preserves_visual_anchor_when_images_load) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 139.527s
+
+OK
