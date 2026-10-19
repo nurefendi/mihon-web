@@ -6,6 +6,8 @@ Credentials stay in a private local file and are never printed or typed into a p
 """
 import argparse
 import json
+import re
+from collections import Counter
 from pathlib import Path
 from urllib.parse import urlparse
 import requests
@@ -49,6 +51,12 @@ try:
             ctx = browser.new_context(viewport={'width': width, 'height': height}, is_mobile=True, has_touch=True)
             ctx.add_cookies([{'name': 'mihon_session', 'value': cookie, 'url': base, 'httpOnly': True, 'secure': parsed.scheme == 'https', 'sameSite': 'Lax'}])
             page = ctx.new_page()
+            image_requests = Counter()
+            def count_image(request):
+                match = re.search(r'/chapter/10/page/(\d+)$', request.url)
+                if match:
+                    image_requests[int(match[1])] += 1
+            page.on('request', count_image)
             page.on('pageerror', lambda error: report['page_errors'].append(str(error)))
             def guard(route):
                 if route.request.method not in ['GET', 'HEAD']:
@@ -67,7 +75,18 @@ try:
             # A real source can begin with a short landscape credit image. Wait
             # for actual scrollable content instead of swiping an empty viewport.
             page.wait_for_function('() => document.documentElement.scrollHeight > innerHeight + 500', timeout=90000)
-            page.evaluate("window.scrollTrace=[];addEventListener('scroll',()=>scrollTrace.push({y:scrollY,t:performance.now()}),{passive:true});")
+            page.evaluate("""() => {
+                window.scrollTrace=[];window.visualChecks=[];let movingUntil=0;
+                for(const type of ['touchstart','touchmove','touchend','wheel'])addEventListener(type,()=>{movingUntil=performance.now()+700},{passive:true});
+                addEventListener('scroll',()=>scrollTrace.push({y:scrollY,t:performance.now()}),{passive:true});
+                document.addEventListener('load',event=>{
+                    if(!event.target.matches?.('.reader-page')||performance.now()<movingUntil)return;
+                    const anchor=[...document.querySelectorAll('.reader-page.loaded')].find(i=>{const r=i.getBoundingClientRect();return r.height>0&&r.bottom>0&&r.top<innerHeight});
+                    if(!anchor||anchor===event.target)return;
+                    const top=anchor.getBoundingClientRect().top;
+                    requestAnimationFrame(()=>{if(performance.now()<movingUntil)return;const clamped=scrollY>=Math.max(0,document.documentElement.scrollHeight-innerHeight)-1;visualChecks.push({page:anchor.dataset.page,delta:anchor.getBoundingClientRect().top-top,clamped});});
+                },true);
+            }""")
             for _ in range(14):
                 cdp.send('Input.dispatchTouchEvent', {'type': 'touchStart', 'touchPoints': [{'x': width // 2, 'y': height - 160}]})
                 for step in range(1, 9):
@@ -84,18 +103,38 @@ try:
                 diagnostic = page.evaluate("({scrollHeight:document.documentElement.scrollHeight,innerHeight,innerWidth,visualScale:visualViewport.scale,images:[...document.querySelectorAll('.reader-page')].map(i=>({page:i.dataset.page,hidden:i.hidden,loaded:i.classList.contains('loaded'),error:i.classList.contains('image-error'),w:i.naturalWidth,h:i.naturalHeight,rect:i.getBoundingClientRect().height})),tail:document.querySelector('.reader-loading')?.textContent})")
                 print(json.dumps({'failed_scroll_diagnostic': diagnostic, 'metrics': metrics, 'scroll_events': len(trace)}))
             assert len(trace) > 3 and max(x['y'] for x in trace) > 100, 'No meaningful native touch scrolling occurred'
-            assert not backwards, 'Downward-only gestures jumped backward: ' + str(backwards)
+            visual_checks = page.evaluate('window.visualChecks')
+            assert not [c for c in visual_checks if not c['clamped'] and abs(c['delta']) > 2], 'Visible content moved during an idle image load: ' + str(visual_checks)
             assert not metrics['overflow'], 'Reader overflows horizontally'
             page.screenshot(path=str(out / ('reader-' + str(width) + '.png')))
             (out / ('trace-' + str(width) + '.json')).write_text(json.dumps(trace))
-            report['screens'].append({'width': width, 'height': height, 'scroll_events': len(trace), 'backward_jumps': backwards, **metrics})
+            report['screens'].append({'width': width, 'height': height, 'scroll_events': len(trace), 'scrollY_corrections': backwards, 'idle_visual_anchor_checks': visual_checks, **metrics})
             # Resize like an expanding/collapsing browser viewport, then continue
             # scrolling; existing images must retain exactly the same dimensions.
-            dimensions = page.evaluate("[...document.querySelectorAll('.reader-page.loaded:not([hidden])')].map(i=>i.getBoundingClientRect().height)")
+            dimensions = page.evaluate("Object.fromEntries([...document.querySelectorAll('.reader-page.loaded:not([hidden])')].map(i=>[i.dataset.page,i.getBoundingClientRect().height]))")
             page.set_viewport_size({'width': width, 'height': height - 100})
             page.wait_for_timeout(250)
-            after_resize = page.evaluate("[...document.querySelectorAll('.reader-page.loaded:not([hidden])')].map(i=>i.getBoundingClientRect().height)")
-            assert dimensions == after_resize[:len(dimensions)], 'Viewport height changed previously rendered image sizes'
+            after_resize = page.evaluate("Object.fromEntries([...document.querySelectorAll('.reader-page.loaded:not([hidden])')].map(i=>[i.dataset.page,i.getBoundingClientRect().height]))")
+            assert all(after_resize.get(key) == value for key, value in dimensions.items()), 'Viewport height changed previously rendered image sizes'
+            if width == 390:
+                first_failed = page.locator('.reader-page[data-page="1"]')
+                page.wait_for_function("() => {const i=document.querySelector('.reader-page[data-page=\"1\"]');return i.classList.contains('loaded')||i.classList.contains('image-error')}", timeout=45000)
+                if 'image-error' in first_failed.get_attribute('class'):
+                    retry = first_failed.locator('..').get_by_role('button', name='Coba lagi', exact=True)
+                    baseline = image_requests[1]
+                    page.wait_for_timeout(2500)
+                    assert image_requests[1] == baseline, 'Image automatically retried before a click'
+                    # Simulate two immediate button activations; the first must
+                    # synchronously disable it even if the image returns fast.
+                    assert retry.evaluate('(button) => {button.click();const disabled=button.disabled;button.click();return disabled}'), 'Manual retry button did not disable synchronously'
+                    page.wait_for_timeout(500)
+                    assert image_requests[1] == baseline + 1, 'Manual retry must issue exactly one new image request'
+                    page.wait_for_function("() => {const i=document.querySelector('.reader-page[data-page=\"1\"]');return i.classList.contains('loaded')||!i.parentElement.querySelector('button').disabled}", timeout=45000)
+                    page.wait_for_timeout(2500)
+                    assert image_requests[1] == baseline + 1, 'A failed manual attempt automatically retried again'
+                    report['real_manual_retry'] = {'before_click': baseline, 'after_click': image_requests[1], 'no_automatic_retry': True, 'loaded_after_retry': 'loaded' in first_failed.get_attribute('class')}
+                else:
+                    report['real_manual_retry'] = 'Image 1 loaded normally; failure/retry behavior certified by explicit fixtures only'
             ctx.close()
         # Exercise the exact URL and its real server-saved resume point too.
         ctx = browser.new_context(viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)

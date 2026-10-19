@@ -99,7 +99,9 @@ test('reader only saves progress after image load, not when an image may have fa
   return url.endsWith('/chapters')?[c]:url.includes('/chapter/3')?c:{id:12,title:'Reader test'};
  });
  await new Promise(r=>setTimeout(r,550));assert.equal(calls.filter(x=>x.opts.method==='PATCH').length,0,'unloaded page must not write progress');
- doc.querySelector('.reader-page').dispatchEvent(new dom.window.Event('load'));await new Promise(r=>setTimeout(r,550));
+ // jsdom has no layout; supply a visible image rectangle for visibility-gated progress.
+ doc.querySelector('.reader-slot:not([hidden]) .reader-page').getBoundingClientRect=()=>({top:100,bottom:400,width:200,height:300});
+ doc.querySelector('.reader-slot:not([hidden]) .reader-page').dispatchEvent(new dom.window.Event('load'));await new Promise(r=>setTimeout(r,550));
  const req=calls.find(x=>x.opts.method==='PATCH');assert.ok(req);assert.equal(req.opts.body.get('lastPageRead'),'1');assert.ok(!req.opts.body.has('read'));dom.window.close();
 });
 

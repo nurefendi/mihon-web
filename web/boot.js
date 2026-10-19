@@ -4,7 +4,7 @@
  const U=window.MihonUI,{escape:e}=U;
  const main=document.querySelector('main'),nav=document.querySelector('#navigation');
  const current=U.route(location.pathname),params=new URLSearchParams(location.search);
- let api,prefs,session,readerCleanup=()=>{},queueSocket,noticeTimer,renderVersion=0;
+ let api,prefs,session,readerCleanup=()=>{},readerSelectPage=()=>{},queueSocket,noticeTimer,renderVersion=0;
  const notice=(text,error=false)=>{const node=document.querySelector('#notice');clearTimeout(noticeTimer);node.textContent=text;node.classList.toggle('error',error);node.hidden=false;noticeTimer=setTimeout(()=>{node.hidden=true;},error?15000:6000);};
  const applyTheme=()=>{document.documentElement.dataset.theme=prefs.theme==='system'?(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):prefs.theme;document.documentElement.dataset.columns=String(prefs.gridColumns||3);};
  async function load(){
@@ -173,16 +173,22 @@
   const shell=document.querySelector('.reader-shell');if(!shell)return;
   readerPage=Number(shell.dataset.readerPage);readerViewed=false;lastSaved=-1;
   if(!Number(shell.dataset.readerCount))return;
-  const images=[...shell.querySelectorAll('.reader-page')];
-  if(shell.dataset.readerMode!=='webtoon'){
-   const loaded=image=>{readerViewed=true;image.classList.add('loaded');readerPage=Number(image.dataset.page);shell.dataset.readerPage=String(readerPage);saveProgress(shell,readerPage);};
-   images.forEach(image=>{image.addEventListener('load',()=>loaded(image));if(image.complete&&image.naturalWidth)loaded(image);});
-   return;
-  }
-  // Append only contiguous, fully loaded pages. Unknown image sizes must never
-  // resize placeholders above the reader or make the document shorter.
-  const tail=shell.querySelector('.reader-loading'),resume=readerPage;
-  let revealed=0,next=0,active=0,target=Math.min(images.length-1,resume+2),frame=0,stopped=false,interacted=false,pendingResume=resume>0,observedPage=-1;
+  const images=[...shell.querySelectorAll('.reader-page')],slots=images.map(image=>image.parentElement);
+  const webtoon=shell.dataset.readerMode==='webtoon';
+  // Independent slots let ready pages display without waiting for earlier pages.
+  const tail=shell.querySelector('.reader-loading'),resume=webtoon?readerPage:0;
+  let settledCount=0,active=0,frame=0,stopped=false,interacted=false,pendingResume=resume>0,observedPage=-1;
+  // Only a button click can move an error back into the request queue.
+  const states=images.map(()=> 'idle'),concurrency=3,preloadMargin=1200;
+  const urls=images.map(image=>U.pageURL(shell.dataset.readerManga,shell.dataset.readerChapter,Number(image.dataset.page)));
+  const retryControls=images.map((image,i)=>{
+   const panel=document.createElement('div'),label=document.createElement('span'),button=document.createElement('button');
+   panel.className='reader-error';panel.hidden=true;button.type='button';button.textContent='Coba lagi';
+   panel.append(label,button);slots[i].append(panel);
+   const retry=()=>{if(stopped||states[i]!=='error')return;states[i]='retry';button.disabled=true;label.textContent=`Memuat ulang halaman ${i+1}…`;pump();};
+   button.addEventListener('click',retry);
+   return {panel,label,button,retry};
+  });
   function track(){
    if(stopped||pendingResume)return;
    const image=images.find(image=>{if(image.hidden||!image.classList.contains('loaded'))return false;const rect=image.getBoundingClientRect();return rect.bottom>innerHeight*.1&&rect.top<innerHeight*.65;});
@@ -190,52 +196,80 @@
   }
   function pump(){
    if(stopped||!shell.isConnected)return;
-   while(active<3&&next<=target){const image=images[next++];active++;image.src=image.dataset.src;}
+   const candidates=images.map((image,i)=>({image,i,rect:slots[i].getBoundingClientRect()}))
+    .filter(({i,rect})=>{
+     if(states[i]==='retry')return true;
+     if(states[i]!=='idle')return false;
+     if(!webtoon)return !slots[i].hidden;
+     return pendingResume?Math.abs(i-resume)<=2:rect.bottom>-preloadMargin&&rect.top<innerHeight+preloadMargin;
+    })
+    .sort((a,b)=>(states[b.i]==='retry')-(states[a.i]==='retry')||(pendingResume?Math.abs(a.i-resume)-Math.abs(b.i-resume):Math.abs(a.rect.top)-Math.abs(b.rect.top)));
+   for(const {image,i} of candidates){if(active>=concurrency)break;states[i]='loading';active++;image.src=urls[i];}
    const failed=images.filter(image=>image.classList.contains('image-error')).length;
-   tail.textContent=revealed===images.length?(failed?`${failed} halaman gagal dimuat · Muat ulang untuk mencoba lagi`:'Semua halaman dimuat'):active?'Memuat halaman…':'Gulir untuk memuat halaman berikutnya';
+   if(tail)tail.textContent=settledCount===images.length?(failed?`${failed} halaman gagal dimuat · Gunakan tombol Coba lagi pada halaman`:'Semua halaman dimuat'):active?'Memuat halaman…':'Gulir untuk memuat halaman berikutnya';
   }
-  function nearTail(){
-   if(tail.getBoundingClientRect().top<innerHeight+1200)target=Math.min(images.length-1,Math.max(target,revealed+2));
-   pump();
-  }
-  function settled(image,ok){
-   if(stopped)return;
-   active--;
-   image.classList.add(ok?'loaded':'image-error');
+  function settled(image,i,ok){
+   if(stopped||states[i]!=='loading')return;
+   // Capture reading content, not scrollY: shrinking an earlier placeholder
+   // requires a negative scroll adjustment to keep the same pixels in view.
+   const visible=images.find(i=>i.classList.contains('loaded')&&i.getBoundingClientRect().bottom>0&&i.getBoundingClientRect().top<innerHeight);
+   const anchor=visible?.parentElement||slots.find(slot=>slot.getBoundingClientRect().bottom>0);
+   const anchorTop=anchor?.getBoundingClientRect().top;
+   active--;states[i]=ok?'loaded':'error';
+   image.classList.toggle('loaded',ok);image.classList.toggle('image-error',!ok);
+   const control=retryControls[i];control.panel.hidden=ok;control.button.disabled=false;control.label.textContent=`Halaman ${Number(image.dataset.page)+1} gagal dimuat.`;
    if(ok&&image.naturalWidth){image.width=image.naturalWidth;image.height=image.naturalHeight;}
-   // An errored page occupies a stable slot; it must not block later pages.
-   while(revealed<images.length&&(images[revealed].classList.contains('loaded')||images[revealed].classList.contains('image-error')))images[revealed++].hidden=false;
-   if(pendingResume&&revealed>resume){
+   image.hidden=false;slots[i].classList.toggle('ready',ok);
+   if(anchor){const delta=anchor.getBoundingClientRect().top-anchorTop;if(delta)window.scrollBy({top:delta,behavior:'instant'});}
+   settledCount=states.filter(state=>state==='loaded'||state==='error').length;
+   if(pendingResume&&states[resume]!=='idle'&&states[resume]!=='loading'){
     requestAnimationFrame(()=>{
      if(stopped||interacted||!pendingResume)return;
-     pendingResume=false;images[resume].scrollIntoView({block:'start',behavior:'instant'});track();nearTail();
+     pendingResume=false;images[resume].scrollIntoView({block:'start',behavior:'instant'});track();pump();
     });
    }
-   nearTail();track();
+   pump();track();
   }
   const cancelResume=()=>{interacted=true;pendingResume=false;};
-  const scroll=()=>{if(frame)return;frame=requestAnimationFrame(()=>{frame=0;if(stopped)return;nearTail();track();});};
+  const scroll=()=>{if(frame)return;frame=requestAnimationFrame(()=>{frame=0;if(stopped)return;pump();track();});};
   const gestures=['touchstart','pointerdown','wheel','keydown'];
   gestures.forEach(type=>document.addEventListener(type,cancelResume,{passive:true}));
   window.addEventListener('scroll',scroll,{passive:true});window.addEventListener('resize',scroll,{passive:true});
-  images.forEach(image=>{image.addEventListener('load',()=>settled(image,true),{once:true});image.addEventListener('error',()=>settled(image,false),{once:true});});
-  readerCleanup=()=>{stopped=true;cancelAnimationFrame(frame);gestures.forEach(type=>document.removeEventListener(type,cancelResume));window.removeEventListener('scroll',scroll);window.removeEventListener('resize',scroll);};
+  const handlers=images.map((image,i)=>{
+   const load=()=>settled(image,i,true),error=()=>settled(image,i,false);
+   image.addEventListener('load',load);image.addEventListener('error',error);return {load,error};
+  });
+  readerCleanup=()=>{
+   stopped=true;cancelAnimationFrame(frame);
+   images.forEach((image,i)=>{
+    image.removeEventListener('load',handlers[i].load);image.removeEventListener('error',handlers[i].error);
+    retryControls[i].button.removeEventListener('click',retryControls[i].retry);
+   });
+   gestures.forEach(type=>document.removeEventListener(type,cancelResume));
+   window.removeEventListener('scroll',scroll);window.removeEventListener('resize',scroll);
+  };
+  // Keep each paged-mode slot and its state: returning to a failed page is not
+  // permission to retry it, and an in-flight hidden page must not save progress.
+  readerSelectPage=page=>{
+   if(stopped||webtoon)return;
+   slots.forEach((slot,i)=>{slot.hidden=i!==page;});observedPage=-1;pump();track();
+  };
   pump();
  }
  function showPage(page){
   const shell=document.querySelector('.reader-shell');if(!shell||page<0||page>=Number(shell.dataset.readerCount))return;
+  clearTimeout(progressTimer);readerViewed=false;
   readerPage=page;shell.dataset.readerPage=String(page);
-  const image=document.querySelector('.reader-page');image.src=U.pageURL(shell.dataset.readerManga,shell.dataset.readerChapter,page);image.alt='Halaman '+(page+1);image.dataset.page=String(page);image.classList.remove('loaded');
   document.querySelector('#page-number').value=String(page+1);
   document.querySelector('[data-action="page-prev"]').disabled=page===0;document.querySelector('[data-action="page-next"]').disabled=page===Number(shell.dataset.readerCount)-1;
   document.querySelector('#reader-status').textContent=`Halaman ${page+1} / ${shell.dataset.readerCount} · Memuat halaman…`;
   history.replaceState(null,'',location.pathname+'?'+new URLSearchParams({mode:shell.dataset.readerMode,at:String(page)}));
-  window.scrollTo({top:0,behavior:'instant'});
+  window.scrollTo({top:0,behavior:'instant'});readerSelectPage(page);
  }
  function movePage(delta){const shell=document.querySelector('.reader-shell');if(shell&&shell.dataset.readerMode!=='webtoon')showPage(readerPage+delta);}
  document.addEventListener('keydown',event=>{if(['INPUT','SELECT','TEXTAREA','BUTTON'].includes(event.target.tagName))return;const shell=document.querySelector('.reader-shell');if(!shell||shell.dataset.readerMode==='webtoon')return;if(['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();movePage((event.key==='ArrowRight'?1:-1)*(shell.dataset.readerMode==='rtl'?-1:1));}});
  window.addEventListener('pagehide',()=>{clearTimeout(progressTimer);const shell=document.querySelector('.reader-shell');if(shell&&readerViewed&&Number(shell.dataset.readerCount)&&shell.querySelector(`.reader-page[data-page="${readerPage}"]`)?.classList.contains('loaded'))saveProgress(shell,readerPage,true);if(queueSocket)queueSocket.close();});
- document.addEventListener('error',event=>{if(event.target.tagName==='IMG'){event.target.classList.add('image-error');if(event.target.classList.contains('reader-page'))notice('Halaman gambar gagal dimuat. Muat ulang atau periksa sumber.',true);}},true);
+ document.addEventListener('error',event=>{if(event.target.tagName==='IMG'){event.target.classList.add('image-error');}},true);
  async function start(){
   nav.innerHTML=U.navigation(current.name==='manga'||current.name==='reader'?'library':current.name);
   try{

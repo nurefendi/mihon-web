@@ -38,6 +38,14 @@ The Nginx config trusts Cloudflare client identity only for the official edge ra
 - **Source-image health did not pass**: during these candidate checks only one image loaded in the initial sections and three failed in each viewport; the saved-position run reported ten failed images. Direct engine probing returned HTTP 500 for page index 1 after 30 seconds, and engine logs recorded `java.io.IOException: Connect timed out`; page index 13 was genuinely served from the engine with HTTP 200. These are real source failures, not invented image responses or evidence of a successful full-chapter read. The scroll fix does not claim to repair the external image host.
 - Candidate screenshots show the real broken-image state and its error notice, without horizontal overflow or a full-screen fixed overlay. This verification is Chromium mobile emulation, **not a physical Android/iPhone or Safari certification**. Public deployment and matching CI remain separately verified release gates.
 
+## Independent loading and manual retry — 2026-10-20 (WIB)
+
+This supersedes the contiguous-reveal design above, which the user rejected because a slow earlier image held back ready later pages. Each page now displays independently. Initial/error slots use width-based estimates; changing natural dimensions compensates the visible reading anchor. Resume requests the saved image first rather than fetching all preceding images. Requests remain bounded to three concurrent image loads.
+
+Failed pages have individual **Coba lagi** controls in webtoon, LTR and RTL. Only an explicit click requeues that image; the button is disabled while queued/in flight. Scroll, resize, repeat failure and paged navigation never implicitly retry. Actual browser regressions were observed RED before implementation, including blocked later images, delayed resume, a 409.5 px visual displacement, missing retry controls and an extra paged request. Parent reran **14 browser regressions and 24 UI tests**, all passed. Candidate build ran Go tests/vet and compiled successfully.
+
+Real-engine candidate QA on `/reader/143/10` passed at 390×844 and 360×800 with native touch input, no JS exceptions or horizontal overflow, saved page 19 in the viewport, and progress snapshot unchanged. On an actual failed page index 1, request count stayed at **1** until manual activation, then became exactly **2**, including a duplicate immediate button activation and a failed retry. No third automatic request occurred. The manual retry did **not** recover the external image; source timeouts remain. Idle image-load visual-anchor measurements were absent in these real network runs (the fixtures cover them); no claim of a complete healthy chapter or physical-device certification is made.
+
 ## Reproducible commands
 
 - `go test -race -count=1 ./...` and `go vet ./...`
