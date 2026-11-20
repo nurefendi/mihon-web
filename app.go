@@ -141,12 +141,18 @@ func csrfOK(r *http.Request, s Session) bool {
 	}
 	return v != "" && subtle.ConstantTimeCompare([]byte(v), []byte(s.CSRF)) == 1
 }
+
+// maxRequestBodyBytes is the single ceiling for inbound bodies: ServeHTTP caps
+// every request with it and the engine proxy buffers uploads within the same
+// boundary, so both gates must never disagree.
+const maxRequestBodyBytes = 32 << 20
+
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "no-store")
-	r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if r.URL.Path == "/healthz" {
 		a.health(w, r)
 		return
