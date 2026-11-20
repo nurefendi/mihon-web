@@ -17,6 +17,7 @@ CONSUMER = SCRIPT.parent.parent / 'ops' / 'reader-integration.py'
 
 def load_fixture():
     spec = importlib.util.spec_from_file_location('reader_fixture', SCRIPT)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -190,6 +191,40 @@ class ReaderFixtureTests(unittest.TestCase):
                                 text=True, capture_output=True, timeout=10)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('--fixture-dir', result.stderr)
+
+    def test_consumer_reads_selected_fixture_but_cannot_call_db_in_unit_tests(self):
+        spec = importlib.util.spec_from_file_location('reader_integration', CONSUMER)
+        assert spec is not None and spec.loader is not None
+        consumer = importlib.util.module_from_spec(spec)
+        with mock.patch('subprocess.run') as run:
+            spec.loader.exec_module(consumer)
+            run.assert_not_called()
+        root = self.generate()
+        for args, environment in [(['--fixture-dir', str(root)], {}),
+                                  ([], {'MIHON_FIXTURE_DIR': str(root)})]:
+            with self.subTest(args=args), mock.patch.dict(os.environ, environment), \
+                    mock.patch.dict(sys.modules, {'requests': None}), \
+                    mock.patch('subprocess.run') as run:
+                with self.assertRaisesRegex(ModuleNotFoundError, 'requests'):
+                    consumer.main(args)
+                run.assert_not_called()
+
+    def test_consumer_isolation_guards_stop_before_optional_imports(self):
+        root = self.generate()
+        original = (root / 'runtime-test.env').read_text()
+        for before, after in [
+                ('http://127.0.0.1:18085', 'http://192.0.2.1:18085'),
+                ('http://127.0.0.1:18085', 'https://example.invalid'),
+                ('mihon-db-test:3306', 'production-db:3306'),
+                ('/mihon_test?', '/mihon_test_production?')]:
+            with self.subTest(after=after):
+                (root / 'runtime-test.env').write_text(original.replace(before, after))
+                result = subprocess.run(
+                    [sys.executable, '-S', str(CONSUMER), '--fixture-dir', str(root)],
+                    env=self.env, text=True, capture_output=True, timeout=10,
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('invalid isolated fixture config', result.stderr)
 
 
 if __name__ == '__main__':
