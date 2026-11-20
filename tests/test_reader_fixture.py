@@ -2,6 +2,9 @@
 import importlib.util
 from pathlib import Path
 import sys
+import os
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -16,6 +19,18 @@ class ReaderFixtureTests(unittest.TestCase):
                 mock.patch.object(Path, 'mkdir', side_effect=AssertionError('import created a directory')):
             spec.loader.exec_module(module)
         self.assertTrue(callable(module.main))
+
+    def test_cli_uses_nested_output_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'arbitrary parent' / 'nested' / 'fixture'
+            env = {k: v for k, v in os.environ.items() if not k.startswith('MIHON_FIXTURE_')}
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), '--output-dir', str(root)],
+                env=env, text=True, capture_output=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((root / '001.cbz').is_file())
+            self.assertTrue((root / 'runtime-test.env').is_file())
 
 
 if __name__ == '__main__':
