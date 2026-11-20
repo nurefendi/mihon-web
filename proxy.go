@@ -61,7 +61,7 @@ func (a *App) engineProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "engine endpoint forbidden", 403)
 		return
 	}
-	if r.ContentLength > 32<<20 {
+	if r.ContentLength > maxRequestBodyBytes {
 		http.Error(w, "upload too large", 413)
 		return
 	}

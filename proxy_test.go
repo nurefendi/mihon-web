@@ -34,6 +34,45 @@ func TestProxyRejectsOversizedUploadBeforeForwarding(t *testing.T) {
 		t.Fatal("partial oversize forwarded")
 	}
 }
+func TestUploadCeilingHasSingleBoundary(t *testing.T) {
+	// The ceiling is a documented contract: pin it so a silent reduction cannot
+	// shrink the largest backup that can be restored.
+	if maxRequestBodyBytes != 32<<20 {
+		t.Fatalf("upload ceiling changed: %d", maxRequestBodyBytes)
+	}
+	var received []int64
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, err := io.Copy(io.Discard, r.Body)
+		if err != nil {
+			t.Errorf("upstream body: %v", err)
+		}
+		received = append(received, n)
+		w.WriteHeader(204)
+	}))
+	defer up.Close()
+	a, _ := testApp(t)
+	a.cfg.Engine = up.URL
+	c, csrf := login(t, a)
+	// A backup exactly at the ceiling must pass both gates untouched: lowering
+	// only one of them would silently truncate a legitimate import.
+	r := httptest.NewRequest("POST", "/api/v1/backup/import", strings.NewReader(strings.Repeat("x", 32<<20)))
+	r.AddCookie(c)
+	r.Header.Set("X-CSRF-Token", csrf)
+	w := httptest.NewRecorder()
+	a.ServeHTTP(w, r)
+	if w.Code != 204 || len(received) != 1 || received[0] != 32<<20 {
+		t.Fatalf("limit-sized upload: status=%d bodies=%v", w.Code, received)
+	}
+	// One byte over must be refused before any upstream mutation.
+	r = httptest.NewRequest("POST", "/api/v1/backup/import", strings.NewReader(strings.Repeat("x", (32<<20)+1)))
+	r.AddCookie(c)
+	r.Header.Set("X-CSRF-Token", csrf)
+	w = httptest.NewRecorder()
+	a.ServeHTTP(w, r)
+	if w.Code != http.StatusRequestEntityTooLarge || len(received) != 1 {
+		t.Fatalf("over-limit upload: status=%d bodies=%v", w.Code, received)
+	}
+}
 func TestProxyVerifiesTLS(t *testing.T) {
 	up := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	up.Config.ErrorLog = log.New(io.Discard, "", 0)
