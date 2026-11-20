@@ -29,7 +29,39 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: go.sum
+      - name: Classify changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          code=true
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ]; then
+            if git fetch --no-tags --depth=1 origin "$BASE_SHA" &&
+               git rev-parse --verify --quiet "$BASE_SHA^{commit}" >/dev/null; then
+              if git diff --quiet "$BASE_SHA" HEAD -- . \
+                ':(exclude)*.md' ':(exclude)LICENSE' ':(exclude)NOTICE' ':(exclude)docs/**'; then
+                code=false
+              fi
+            else
+              echo "::warning::Cannot resolve PR base $BASE_SHA; running full verification."
+            fi
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "non-documentation changes present: $code"
+      - name: Report change classification
+        env:
+          CODE_CHANGES: ${{ steps.changes.outputs.code }}
+        run: |
+          if [ "$CODE_CHANGES" = "true" ]; then
+            echo "Code changes detected: running full verification suites."
+          else
+            echo "Documentation-only change: Go, UI, browser and image suites skipped; this check still reports success."
+          fi
       - name: Go verification including isolated MariaDB
+        if: steps.changes.outputs.code == 'true'
         env:
           MYSQL_TEST_DSN: mihon_web_test:ci-only-isolated-test@tcp(127.0.0.1:3306)/mihon_web_test?parseTime=true
         run: |
@@ -37,10 +69,12 @@ jobs:
           go test -race -count=1 ./... 2>&1 | tee test.log
           go vet ./...
       - name: UI contracts
+        if: steps.changes.outputs.code == 'true'
         run: |
           npm install --prefix "$RUNNER_TEMP/mihon-ui-test" --no-save --ignore-scripts --no-audit --no-fund jsdom@26.1.0
           NODE_PATH="$RUNNER_TEMP/mihon-ui-test/node_modules" node --test tests/ui.test.cjs tests/ui.dom.cjs
       - name: Mobile reader scroll regressions
+        if: steps.changes.outputs.code == 'true'
         run: |
           set -o pipefail
           python3 -m venv "$RUNNER_TEMP/mihon-browser-test"
@@ -48,6 +82,7 @@ jobs:
           "$RUNNER_TEMP/mihon-browser-test/bin/python" -m playwright install --with-deps chromium
           "$RUNNER_TEMP/mihon-browser-test/bin/python" tests/test_reader_scroll.py 2>&1 | tee -a test.log
       - name: Build runtime image
+        if: steps.changes.outputs.code == 'true'
         run: docker build -t mihon-web:ci .
       - name: Publish readable CI status over Git SSH
         if: always() && github.event_name == 'push'
@@ -56,7 +91,11 @@ jobs:
           SOURCE_SHA: ${{ github.sha }}
         run: |
           mkdir -p "$RUNNER_TEMP/ci-status"
-          cp test.log "$RUNNER_TEMP/ci-status/test.log" 2>/dev/null || true
+          if [ -f test.log ]; then
+            cp test.log "$RUNNER_TEMP/ci-status/test.log"
+          else
+            printf 'verification suites skipped: documentation-only change\n' > "$RUNNER_TEMP/ci-status/test.log"
+          fi
           printf 'source_sha=%s\nstatus=%s\n' "$SOURCE_SHA" "$RESULT" > "$RUNNER_TEMP/ci-status/status.txt"
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
