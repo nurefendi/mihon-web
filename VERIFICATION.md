@@ -52,6 +52,6 @@ Real-engine candidate QA on `/reader/143/10` passed at 390×844 and 360×800 wit
 - See `tests/ui.README.md` for isolated dev-only UI dependencies and real-engine read smoke.
 - `ops/smoke.py` performs the bounded HTTP checks using a local private password file. Its temporary category is explicitly labelled and removed; preferences are restored from the captured original values.
 - `ops/browser-qa.py` tests the actual public website and screenshots mobile/desktop. Its one-host DNS override preserves TLS verification and was needed because the VPS resolver cached the domain's earlier NXDOMAIN.
-- `ops/reader-integration.py` targets **only loopback 18085 and `mihon-db-test`**; it is intentionally guarded against using production. It requires the separately provisioned technical CBZ fixture/engine. It never seeds production content.
+- `ops/reader-integration.py --fixture-dir "$MIHON_FIXTURE_DIR"` targets **only an explicit loopback origin (default port 18085) and `mihon-db-test`**; it is intentionally guarded against using production. It requires the separately provisioned technical CBZ fixture/engine. See `tests/reader-fixture.README.md` for portable generation, private output paths and isolated runtime overrides. It never seeds production content.
 
 GitHub remote commit readback and matching CI status are separate release checks; do not infer them from local tests.
