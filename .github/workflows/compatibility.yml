@@ -1,0 +1,29 @@
+name: Version compatibility
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  deprecations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Pinned official SA1019 source and test analysis
+        env:
+          GOTOOLCHAIN: local
+          GOFLAGS: -mod=readonly
+          GOWORK: 'off'
+        run: |
+          # Staticcheck 2026.2.2 supports Go 1.27.2+ export data.
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
+          "$(go env GOPATH)/bin/staticcheck" -version
+          "$(go env GOPATH)/bin/staticcheck" -checks=SA1019 -show-ignored ./...
+          # SA1019 is not a complete breaking-behavior or runtime compatibility audit.
